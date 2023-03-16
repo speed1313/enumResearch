@@ -30,7 +30,7 @@ func run(pass *analysis.Pass) (any, error) {
 	inspect.Preorder(nodeFilter, func(n ast.Node) {
 		switch n := n.(type) {
 		case *ast.Ident:
-			if n.Name == "enum" {
+			if n.Name == "fmt" {
 				pass.Reportf(n.Pos(), "identifier is enum")
 			}
 		}

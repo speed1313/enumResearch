@@ -5,10 +5,9 @@ import (
 	"os/exec"
 )
 
-
-func mai(){
+func mai() {
 	cmd := exec.Command("go", "vet", "./...")
-	out, err :=  cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			print(string(out))

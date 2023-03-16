@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 func main() {
@@ -25,7 +27,9 @@ func main() {
 	scanner := bufio.NewScanner(response.Body)
 	impoertedByCount := 0
 	// int64 enumCounter
-	var enumCount int64 = 0
+	var enumCount uint64 = 0
+	wg := sync.WaitGroup{}
+
 	for scanner.Scan() {
 		// read one line from response.Body
 		line := scanner.Text()
@@ -44,38 +48,39 @@ func main() {
 			// "go vet  $(go list -f '{{.Dir}}' $(go list -f '{{join .Deps "\n"}}' a))"
 			hashDir := sha256.Sum256([]byte(url))
 			dir := fmt.Sprintf("%x", hashDir[:8])
-			doVet(dir, &enumCount)
+
+			wg.Add(1)
+			func(dir string, enumCount *uint64){
+				defer wg.Done()
+				doVet(dir, enumCount)
+			}(dir, &enumCount)
 
 			if impoertedByCount > 5 {
 				break
 			}
-
 		}
-
 	}
+	wg.Wait()
+
 	fmt.Printf("ImportedBy count: %d\n", impoertedByCount)
 	fmt.Printf("enum count: %d\n", enumCount)
 }
-
 
 func prepareWorkSpace(pkgName string) {
 	hashDir := sha256.Sum256([]byte(pkgName))
 	// dir change to string
 	dir := fmt.Sprintf("%x", hashDir[:8])
 	// create dir
-	err := os.MkdirAll(dir, 0755)
-	if err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Fatal("mkdir failed: ", err)
 	}
 	// cd dir
-	err = os.Chdir(dir)
-	if err != nil {
+	if err := os.Chdir(dir); err != nil {
 		log.Fatal("cd failed: ", err)
 	}
 	// create go.mod
 	if _, err := os.Stat("go.mod"); os.IsNotExist(err) {
-		err = exec.Command("go", "mod", "init", "a").Run()
-		if err != nil {
+		if err := exec.Command("go", "mod", "init", "a").Run(); err != nil {
 			log.Fatal("go mod init failed: ", err)
 		}
 	}
@@ -84,43 +89,42 @@ func prepareWorkSpace(pkgName string) {
 	if err != nil {
 		log.Fatal("create tmp.go failed: ", err)
 	}
-	_, err = f.WriteString("package a\nimport \"" + pkgName + "\"")
-	if err != nil {
+	if _, err = f.WriteString("package a\nimport \"" + pkgName + "\""); err != nil {
 		log.Fatal("write tmp.go failed: ", err)
 	}
-	err = exec.Command("go", "mod", "tidy").Run()
 
-	if err != nil {
+	if err = exec.Command("go", "mod", "tidy").Run(); err != nil {
 		log.Fatal("go mod tidy failed: ", err)
 	}
 }
 
-func doVet(dir string, enumCount *int64) {
+func doVet(dir string, enumCount *uint64) {
 	// "go vet  $(go list -f '{{.Dir}}' $(go list -f '{{join .Deps "\n"}}' a))"
 	cmd := exec.Command("zsh", "-c", `go list -f '{{.Dir}}' $(go list -f '{{join .Deps "\n"}}' a)`)
 	pkglist, err := cmd.Output()
 	if err != nil {
 		log.Fatal("go list failed: ", err)
 	}
+	wg2 := sync.WaitGroup{}
 	for _, dir := range strings.Split(string(pkglist), "\n") {
-		if err != nil {
-			log.Fatal("go list failed: ", err)
-		}
-		cmd = exec.Command("zsh", "-c", `go vet -vettool=$(which enumResearch) ` +  dir)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			print("vet output:", string(out))
-			*enumCount++
-		}
+		wg2.Add(1)
+		func (dir string) {
+			cmd := exec.Command("zsh", "-c", `go vet -vettool=$(which enumResearch) `+dir)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				print("vet output: ", string(out))
+				atomic.AddUint64(enumCount, 1)
+			}
+			wg2.Done()
+		}(dir)
 	}
+	wg2.Wait()
 
-	err = os.Chdir("..")
-	if err != nil {
+	if err = os.Chdir(".."); err != nil {
 		log.Fatal("cd failed: ", err)
 	}
 	// remove dir
-	err = os.RemoveAll(dir)
-	if err != nil {
+	if err = os.RemoveAll(dir); err != nil {
 		log.Fatal("remove failed: ", err)
 	}
 }
